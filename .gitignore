@@ -1,0 +1,15 @@
+# OS files
+.DS_Store
+
+# Python
+__pycache__/
+.pytest_cache/
+
+# Node/Web
+node_modules/
+dist/
+coverage/
+
+# Editor
+.vscode/
+.idea/
