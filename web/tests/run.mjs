@@ -57,18 +57,20 @@ function approxEqual(a, b, eps = 1e-6) { return Math.abs(a - b) < eps; }
 
 // Test 4: chain reaction when two groups join after contraction
 {
-  // R G G  R  -> insert G between groups would normally cause clear; here we simulate post-insert state
+  // R R G G G R R  -> clear GGG -> RRRR (should chain clear)
   const s = mkState([
     { s: 200, color: 'R' },
-    { s: 200 - ORB_SPACING, color: 'G' },
-    { s: 200 - 2*ORB_SPACING, color: 'R' },
+    { s: 200 - ORB_SPACING, color: 'R' },
+    { s: 200 - 2*ORB_SPACING, color: 'G' },
+    { s: 200 - 3*ORB_SPACING, color: 'G' },
+    { s: 200 - 4*ORB_SPACING, color: 'G' },
+    { s: 200 - 5*ORB_SPACING, color: 'R' },
+    { s: 200 - 6*ORB_SPACING, color: 'R' },
   ], 200);
-  // Insert G after the first orb to create R G G R contiguous after spacing enforcement
-  s.orbs.push({ s: 200 + ORB_SPACING, color: 'G' });
   enforceOrderAndSpacing(s);
-  // Now orbs should be [R, G, G, R]; clear around index 1
-  handleMatches(s, 1);
-  assert.ok(s.orbs.length <= 2, 'chain reaction reduces chain');
+  const removed = handleMatches(s, 3); // index 3 points at a 'G'
+  assert.equal(removed, 7, 'clears GGG then RR+RR -> 4 more (total 7)');
+  assert.equal(s.orbs.length, 0, 'all cleared after chain reaction');
 }
 
 console.log('All core tests passed.');

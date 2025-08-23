@@ -1,7 +1,8 @@
 // Llama Bomba — Web MVP based on PRD
 // Canvas-based Zuma-like core: path, moving chain, shooter, matching.
-import { ORB_RADIUS, ORB_SPACING, buildPath, enforceOrderAndSpacing, handleMatches, chooseInsertionS, dist2, EventBus } from './core.js';
+import { ORB_RADIUS, ORB_SPACING, buildPath, enforceOrderAndSpacing, handleMatches, chooseInsertionS, dist2, EventBus, removeAroundS } from './core.js';
 import { gameConfig, levels } from './config.js';
+import { AudioManager } from './audio.js';
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
@@ -13,6 +14,9 @@ const ui = {
   level: document.getElementById('level'),
   status: document.getElementById('status'),
   restart: document.getElementById('btn-restart'),
+  audio: document.getElementById('btn-audio'),
+  puSlow: document.getElementById('btn-pu-slow'),
+  puBomb: document.getElementById('btn-pu-bomb'),
 };
 
 // Config-driven values
@@ -47,7 +51,27 @@ const Game = {
   chainCombo: 0,
   state: 'playing', // 'playing' | 'won' | 'lost'
   eventBus: new EventBus(),
+  powerups: {
+    slow: gameConfig.powerups.slow.stock,
+    bomb: gameConfig.powerups.bomb.stock,
+    bombArmed: false,
+  },
+  effects: {
+    slowUntil: 0,
+    slowFactor: gameConfig.powerups.slow.factor,
+  },
 };
+
+// Audio (platform adapter)
+const audio = new AudioManager();
+const unlockAudio = () => audio.unlock();
+['click', 'keydown', 'touchstart'].forEach((evt) => window.addEventListener(evt, unlockAudio, { once: true, passive: true }));
+
+// Event wiring for audio
+Game.eventBus.on('match_cleared', (e) => {
+  const { count } = e.payload || {};
+  audio.play('match', { count });
+});
 
 function initLevel(lv) {
   Game.level = lv;
@@ -68,6 +92,8 @@ function initLevel(lv) {
   ui.level.textContent = lv.name;
   ui.score.textContent = `Score: ${Game.score}`;
   ui.status.textContent = 'Aim and click to shoot';
+  // Reset powerup UI
+  refreshPowerupButtons?.();
 }
 
 function pickColor() {
@@ -94,13 +120,62 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'ArrowRight') SHOOTER.angle += 0.05;
 });
 ui.restart.addEventListener('click', () => initLevel(level1));
+if (ui.audio) {
+  ui.audio.addEventListener('click', () => {
+    const muted = audio.toggleMuted();
+    ui.audio.classList.toggle('muted', muted);
+    ui.audio.textContent = muted ? 'Unmute' : 'Mute';
+  });
+}
+
+// Power-up UI handlers
+function refreshPowerupButtons() {
+  if (ui.puSlow) ui.puSlow.textContent = `Slow (${Game.powerups.slow})`;
+  if (ui.puBomb) {
+    ui.puBomb.textContent = `Bomb (${Game.powerups.bomb})${Game.powerups.bombArmed ? ' [ARMED]' : ''}`;
+    ui.puBomb.classList.toggle('armed', Game.powerups.bombArmed);
+  }
+  if (ui.puSlow) ui.puSlow.disabled = Game.powerups.slow <= 0;
+  if (ui.puBomb) ui.puBomb.disabled = Game.powerups.bomb <= 0 && !Game.powerups.bombArmed;
+}
+
+ui.puSlow?.addEventListener('click', () => {
+  if (Game.powerups.slow <= 0) return;
+  Game.powerups.slow -= 1;
+  Game.effects.slowUntil = performance.now() / 1000 + gameConfig.powerups.slow.durationSec;
+  audio.play('chain', { dur: 0.2, vol: 0.2 });
+  refreshPowerupButtons();
+});
+
+ui.puBomb?.addEventListener('click', () => {
+  if (Game.powerups.bombArmed) {
+    Game.powerups.bombArmed = false; // disarm
+  } else if (Game.powerups.bomb > 0) {
+    Game.powerups.bombArmed = true; // arm for next shot
+    Game.powerups.bomb -= 1;
+  }
+  refreshPowerupButtons();
+});
+
+// Keyboard shortcuts
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'b' || e.key === 'B') ui.puBomb?.click();
+  if (e.key === 's' || e.key === 'S') ui.puSlow?.click();
+});
 
 function shoot() {
   const c = SHOOTER.nextColor || pickColor();
   const vx = Math.cos(SHOOTER.angle) * PROJECTILE_SPEED;
   const vy = Math.sin(SHOOTER.angle) * PROJECTILE_SPEED;
-  Game.projectiles.push({ x: SHOOTER.x, y: SHOOTER.y, vx, vy, color: c });
+  const type = Game.powerups.bombArmed ? 'bomb' : 'normal';
+  Game.projectiles.push({ x: SHOOTER.x, y: SHOOTER.y, vx, vy, color: c, type });
+  if (type === 'bomb') {
+    Game.powerups.bombArmed = false;
+    ui.puBomb?.classList.remove('armed');
+  }
   SHOOTER.nextColor = pickColor();
+  Game.eventBus.emit({ type: 'shoot', payload: {}, timestamp: performance.now() });
+  audio.play('shoot');
 }
 
 // Update loop
@@ -116,7 +191,10 @@ function frame(ts) {
 function update(dt) {
   if (Game.state !== 'playing') return;
   // Advance lead and maintain spacing
-  Game.leadS += CHAIN_SPEED * dt;
+  const now = performance.now() / 1000;
+  const slowActive = now < Game.effects.slowUntil;
+  const effSpeed = CHAIN_SPEED * (slowActive ? Game.effects.slowFactor : 1);
+  Game.leadS += effSpeed * dt;
   // Move each orb to follow with spacing
   if (Game.orbs.length > 0) {
     Game.orbs[0].s = Game.leadS;
@@ -150,29 +228,43 @@ function update(dt) {
     if (hitIndex !== -1) {
       // Decide whether to insert before or after based on proximity
       const baseS = Game.orbs[hitIndex].s;
-      const insertS = chooseInsertionS(Game.path, baseS, { x: p.x, y: p.y });
-      const inserted = { s: insertS, color: p.color };
-      Game.orbs.push(inserted);
-      Game.projectiles.splice(pi, 1);
-      // Enforce ordering and spacing, then find inserted index
-      enforceOrderAndSpacing(Game);
-      const idx = Game.orbs.indexOf(inserted);
-      // Check matches and scoring from inserted position
-      const removed = handleMatches(Game, idx);
-      if (removed > 0) {
-        // Scoring via config and combo bonus
-        const base = gameConfig.scoring.basePerOrb * removed;
-        const bonus = Game.chainCombo > 0 ? gameConfig.scoring.chainBonusStep * Game.chainCombo : 0;
-        Game.score += base + bonus;
-        ui.score.textContent = `Score: ${Game.score}`;
-        Game.chainCombo += 1;
+      if (p.type === 'bomb') {
+        const removed = removeAroundS(Game, baseS, gameConfig.powerups.bomb.radius);
+        Game.projectiles.splice(pi, 1);
+        if (removed > 0) {
+          const basePts = gameConfig.scoring.basePerOrb * removed;
+          Game.score += basePts;
+          ui.score.textContent = `Score: ${Game.score}`;
+          Game.chainCombo = 0;
+          audio.play('bomb', { dur: 0.18, vol: 0.22 });
+        }
       } else {
-        Game.chainCombo = 0;
+        const insertS = chooseInsertionS(Game.path, baseS, { x: p.x, y: p.y });
+        const inserted = { s: insertS, color: p.color };
+        Game.orbs.push(inserted);
+        Game.projectiles.splice(pi, 1);
+        // Enforce ordering and spacing, then find inserted index
+        enforceOrderAndSpacing(Game);
+        const idx = Game.orbs.indexOf(inserted);
+        // Check matches and scoring from inserted position
+        const removed = handleMatches(Game, idx);
+        if (removed > 0) {
+          // Scoring via config and combo bonus
+          const base = gameConfig.scoring.basePerOrb * removed;
+          const bonus = Game.chainCombo > 0 ? gameConfig.scoring.chainBonusStep * Game.chainCombo : 0;
+          Game.score += base + bonus;
+          ui.score.textContent = `Score: ${Game.score}`;
+          Game.chainCombo += 1;
+        } else {
+          Game.chainCombo = 0;
+        }
       }
       // Check win
       if (Game.orbs.length === 0) {
         Game.state = 'won';
         ui.status.textContent = 'Level cleared!';
+        Game.eventBus.emit({ type: 'level_cleared', payload: {}, timestamp: performance.now() });
+        audio.play('win', { dur: 0.3, vol: 0.25 });
       }
     }
   }
@@ -184,6 +276,8 @@ function update(dt) {
     if (Game.orbs[0].s >= Game.path.length + Game.level.templeEndOffset) {
       Game.state = 'lost';
       ui.status.textContent = 'The orbs reached the temple!';
+      Game.eventBus.emit({ type: 'game_over', payload: {}, timestamp: performance.now() });
+      audio.play('lose', { dur: 0.35, vol: 0.22 });
     }
   }
 }

@@ -7,6 +7,10 @@ export const gameConfig = {
   pathWidth: 8,
   trajectoryPreview: true,
   scoring: { basePerOrb: 100, chainBonusStep: 50 },
+  powerups: {
+    bomb: { radius: 3 * 28 /* ~3 orb spacings worth in px */, stock: 3 },
+    slow: { factor: 0.35, durationSec: 4, stock: 3 },
+  },
 };
 
 export const levels = [
@@ -24,4 +28,3 @@ export const levels = [
     templeEndOffset: -40,
   },
 ];
-

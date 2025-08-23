@@ -25,10 +25,12 @@ html, body {
   cursor: pointer;
 }
 .hud .controls button:hover { background: #39a6a6; }
+.hud .controls #btn-audio.muted { background: #7a3b3b; }
+.hud .controls #btn-pu-bomb.armed { background: #b05b2e; }
+.hud .controls button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 canvas#game {
   display: block;
   margin: 0 auto;
   background: linear-gradient(180deg, #163c45 0%, #0c262c 100%);
 }
-

@@ -68,22 +68,31 @@ export function handleMatches(state, index) {
 
   const count = R - L + 1;
   if (count >= 3) {
+    // Remove matched block
     orbs.splice(L, count);
-    const delta = ORB_SPACING * count * 0.9;
-    for (let i = 0; i < Math.min(L, orbs.length); i++) {
-      orbs[i].s -= delta;
-    }
-    if (typeof state.leadS === 'number') {
-      state.leadS -= delta;
-      if (state.leadS < 0) state.leadS = 0;
+    // Close the gap by aligning seam to exact spacing
+    const leftIdx = L - 1;
+    const rightIdx = L;
+    if (leftIdx >= 0 && rightIdx < orbs.length) {
+      const desiredFrontS = orbs[rightIdx].s + ORB_SPACING;
+      const shift = Math.max(0, orbs[leftIdx].s - desiredFrontS);
+      if (shift > 0) {
+        for (let i = 0; i <= leftIdx; i++) {
+          orbs[i].s -= shift;
+        }
+        if (typeof state.leadS === 'number') {
+          state.leadS = Math.max(0, state.leadS - shift);
+        }
+      }
     }
     if (state.eventBus && typeof state.eventBus.emit === 'function') {
       state.eventBus.emit({ type: 'match_cleared', payload: { color, count }, timestamp: performance?.now?.() ?? Date.now() });
     }
     let total = count;
-    if (L > 0 && L < orbs.length) {
-      total += handleMatches(state, L - 1);
-    }
+    const leftIdx2 = L - 1;
+    const rightIdx2 = L;
+    if (leftIdx2 >= 0 && leftIdx2 < orbs.length) total += handleMatches(state, leftIdx2);
+    if (rightIdx2 >= 0 && rightIdx2 < orbs.length) total += handleMatches(state, rightIdx2);
     return total;
   }
   return 0;
@@ -103,4 +112,36 @@ export class EventBus {
     if (!set) return;
     for (const fn of set) fn(evt);
   }
+}
+
+export function removeAroundS(state, centerS, radius) {
+  const { orbs } = state;
+  if (orbs.length === 0) return 0;
+  let L = -1, R = -1;
+  for (let i = 0; i < orbs.length; i++) {
+    const d = Math.abs(orbs[i].s - centerS);
+    if (d <= radius) {
+      if (L === -1) L = i;
+      R = i;
+    }
+  }
+  if (L === -1) return 0;
+  const removedCount = R - L + 1;
+  orbs.splice(L, removedCount);
+  const leftIdx = L - 1;
+  const rightIdx = L;
+  if (leftIdx >= 0 && rightIdx < orbs.length) {
+    const desiredFrontS = orbs[rightIdx].s + ORB_SPACING;
+    const shift = Math.max(0, orbs[leftIdx].s - desiredFrontS);
+    if (shift > 0) {
+      for (let i = 0; i <= leftIdx; i++) orbs[i].s -= shift;
+      if (typeof state.leadS === 'number') state.leadS = Math.max(0, state.leadS - shift);
+    }
+  }
+  let total = removedCount;
+  const leftIdx2 = L - 1;
+  const rightIdx2 = L;
+  if (leftIdx2 >= 0 && leftIdx2 < orbs.length) total += handleMatches(state, leftIdx2);
+  if (rightIdx2 >= 0 && rightIdx2 < orbs.length) total += handleMatches(state, rightIdx2);
+  return total;
 }
